@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meesho Inventory Pro - Clean Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5; min-height: 100vh; padding: 20px;
+        }
+        .container {
+            max-width: 1500px; margin: 0 auto; background: white;
+            border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden;
+        }
+        .header { background: #764ba2; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; }
+        .upload-section {
+            border: 2px dashed #764ba2; border-radius: 8px; padding: 20px;
+            text-align: center; margin-bottom: 20px; background: #fdfaff;
+        }
+        .upload-btn { background: #764ba2; color: white; padding: 10px 20px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; }
+        #searchInput { width: 100%; padding: 15px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; margin-bottom: 20px; }
+        #searchInput:focus { outline: none; border-color: #764ba2; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f8f9fa; padding: 12px; text-align: left; font-size: 13px; color: #333; border-bottom: 2px solid #dee2e6; position: sticky; top: 0; }
+        td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; vertical-align: middle; }
+        
+        .link-group { display: flex; flex-direction: column; gap: 8px; }
+        .btn-link { text-decoration: none; font-size: 12px; font-weight: 600; }
+        .backend-link { color: #9c27b0; }
+        .frontend-link { color: #1a73e8; }
+        
+        .copyable { cursor: pointer; background: #f1f3f4; padding: 3px 6px; border-radius: 4px; font-family: monospace; border: 1px solid #dadce0; }
+        .highlight { background: #fff176; font-weight: bold; }
+        .low-stock { color: #d93025; font-weight: bold; background: #feeaee; padding: 2px 5px; border-radius: 3px; }
+        .copy-tooltip { position: fixed; background: #323336; color: white; padding: 6px 12px; border-radius: 4px; font-size: 12px; opacity: 0; transition: opacity 0.2s; z-index: 1000; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>📦 Meesho Inventory Pro</h1>
+        <p>Direct Search & Link Management</p>
+    </div>
+
+    <div class="content">
+        <div class="upload-section" id="dropZone">
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">📁 Load Inventory Excel</button>
+            <input type="file" id="fileInput" hidden accept=".xlsx, .xls">
+            <p id="fileStatus" style="margin-top:10px; color:#666;">Select your Meesho inventory export file</p>
+        </div>
+
+        <div id="mainUI" style="display:none;">
+            <input type="text" id="searchInput" placeholder="Search by Title, SKU, Catalog ID, or Product ID...">
+            <div id="resultsWrapper" style="display:none; overflow-x:auto; max-height: 75vh;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:220px;">Direct Links</th>
+                            <th>Product Details</th>
+                            <th>Style ID (SKU)</th>
+                            <th style="text-align:center;">Stock</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="tooltip" class="copy-tooltip">Copied!</div>
+
+<script>
+    let inventory = [];
+    const fileInput = document.getElementById('fileInput');
+    const searchInput = document.getElementById('searchInput');
+
+    fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+    
+    function handleFile(file) {
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            
+            // Filter out junk/header rows
+            inventory = json.filter(row => row['CATALOG ID'] && !String(row['CATALOG ID']).toLowerCase().includes('catalog'));
+            
+            document.getElementById('mainUI').style.display = 'block';
+            document.getElementById('fileStatus').innerText = "✅ " + file.name + " Ready";
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    searchInput.addEventListener('input', () => {
+        const query = searchInput.value.toLowerCase().trim();
+        const wrapper = document.getElementById('resultsWrapper');
+        if (!query) { wrapper.style.display = 'none'; return; }
+        wrapper.style.display = 'block';
+        
+        const terms = query.split(/\s+/).filter(t => t !== '');
+        const filtered = inventory.filter(item => {
+            const searchPool = [item['PRODUCT NAME'], item['STYLE ID'], item['CATALOG ID'], item['PRODUCT ID']].map(f => String(f||'').toLowerCase());
+            return terms.every(t => searchPool.some(f => f.includes(t)));
+        });
+        renderTable(filtered, query);
+    });
+
+    function renderTable(data, query) {
+        const body = document.getElementById('resultsBody');
+        body.innerHTML = '';
+
+        data.forEach(item => {
+            const catId = String(item['CATALOG ID'] || '');
+            const prodId = String(item['PRODUCT ID'] || '');
+            const sku = String(item['STYLE ID'] || '');
+            const name = item['PRODUCT NAME'] || '';
+            const stock = parseInt(item['SYSTEM STOCK COUNT'] || 0);
+
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>
+                    <div class="link-group">
+                        <a href="https://supplier.meesho.com/panel/v3/new/services/bteky/inventory/search?query=${catId}&type=catalog" target="_blank" class="btn-link backend-link">🏠 Backend: ${highlight(catId, query)}</a>
+                        <a href="https://www.meesho.com/search?q=s-${prodId}&searchType=manual" target="_blank" class="btn-link frontend-link">🛒 Frontend: ${highlight(prodId, query)}</a>
+                    </div>
+                </td>
+                <td>${highlight(name, query)}</td>
+                <td><span class="copyable" onclick="copyText('${sku}', event)">${highlight(sku, query)}</span></td>
+                <td style="text-align:center;"><span class="${stock < 10 ? 'low-stock' : ''}">${stock}</span></td>
+            `;
+            body.appendChild(row);
+        });
+    }
+
+    function highlight(text, query) {
+        if(!query) return text;
+        let res = String(text);
+        query.split(/\s+/).forEach(t => { 
+            if(t.length > 0) {
+                const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                res = res.replace(new RegExp(`(${escaped})`, 'gi'), '<span class="highlight">$1</span>'); 
+            }
+        });
+        return res;
+    }
+
+    function copyText(text, event) {
+        navigator.clipboard.writeText(text);
+        const tip = document.getElementById('tooltip');
+        tip.style.left = event.pageX + 'px'; tip.style.top = (event.pageY - 30) + 'px';
+        tip.style.opacity = '1'; setTimeout(() => tip.style.opacity = '0', 1000);
+    }
+</script>
+</body>
+</html>
